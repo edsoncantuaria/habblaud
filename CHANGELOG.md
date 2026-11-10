@@ -10,6 +10,14 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Agentes do Shellby no escritório.** Com `HABBLAUD_SHELLBY_URL` (ex.: `http://127.0.0.1:3333`), os agentes do ChatGPT que
+  usam o Shellby por MCP entram na sala “shellby”, e a caixa de mensagem da gaveta manda instruções para a fila de steer
+  deles. Esses agentes nunca vão para o Habblaud World.
+- **Login por um provedor OIDC na porta remota.** Com `HABBLAUD_REMOTE_OIDC_*`, a porta remota entra pelo IAM da organização, e só
+  os e-mails da lista têm acesso.
+
 ## [1.0.3] - 2026-10-16
 
 ### Corrigido

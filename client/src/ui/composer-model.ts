@@ -40,6 +40,7 @@ export function composerMode(agent: AgentInfo | undefined, env: ComposerEnv): Co
 
 /** Dica embaixo da caixa (gaveta): como a mensagem entra na sessão. */
 export function composerTip(provider: Provider = 'claude'): string {
+  if (provider === 'shellby') return tr('Vai direto para o chat do agente assim que ele estiver livre. Enter manda; Shift+Enter quebra a linha.');
   return provider === 'codex'
     ? tr('Entra na fila da sessão e vira o próximo prompt quando o Codex terminar o que está fazendo. Enter manda; Shift+Enter quebra a linha.')
     : tr('Entra na sessão como se você tivesse digitado. Enter manda; Shift+Enter quebra a linha.');
@@ -97,6 +98,7 @@ export function sendStatusText(s: SendState | undefined, now: number, provider: 
       // Entregue = entrou na sessão ou na fila dela (com o agente ocupado, só entra quando ele terminar o turno). No
       // Codex é sempre a fila: o dono da sessão a consulta a cada ~10 s e só a usa com a sessão ociosa.
       if (now - s.at >= DELIVERED_SHOW_MS) return '';
+      if (provider === 'shellby') return tr('Entregue ✓: vai para o chat do agente assim que ele estiver livre');
       return codex
         ? tr('Entregue ✓ na fila da sessão: entra quando o Codex terminar o que está fazendo (até ~10 s)')
         : tr('Entregue ✓ (se o agente estiver ocupado, entra quando ele terminar)');

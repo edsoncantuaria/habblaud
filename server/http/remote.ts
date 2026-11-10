@@ -25,7 +25,9 @@ import https from 'node:https';
 import net from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { errMsg, log } from '../log';
 import { parsePasswordHash, verifyPassword, type PasswordHash } from '../remote/password';
+import { OIDC_CALLBACK_PATH, OIDC_LOGIN_PATH, OIDC_STATE_COOKIE, parseOidcConfig, type OidcConfig, type OidcLogin } from './oidc';
 import { hostAllowed } from './guard';
 import { getLocale, tr } from '../../shared/i18n';
 
@@ -50,6 +52,8 @@ export interface RemoteConfig {
   allow: ReadonlySet<RemoteFeature>;
   /** Ausente = HTTP puro (só com HABBLAUD_REMOTE_INSECURE_HTTP=1). */
   tls?: RemoteTls;
+  /** Login pelo IAM no lugar do usuário e senha. */
+  oidc?: OidcConfig;
 }
 
 export const DEFAULT_REMOTE_PORT = 4748;
@@ -89,8 +93,10 @@ export function parseRemoteConfig(
   const rawPort = Number.parseInt(env.HABBLAUD_REMOTE_PORT ?? '', 10);
   const port = inDocker ? DEFAULT_REMOTE_PORT : Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : DEFAULT_REMOTE_PORT;
   const host = inDocker ? '0.0.0.0' : env.HABBLAUD_REMOTE_HOST?.trim() || '0.0.0.0';
+  const { oidc, warning } = parseOidcConfig(env);
   return {
-    config: { port, host, user, passwordHash, passwordHashText: hashText, allow: parseAllow(env.HABBLAUD_REMOTE_ALLOW), tls: hasTls ? tls : undefined },
+    config: { port, host, user, passwordHash, passwordHashText: hashText, allow: parseAllow(env.HABBLAUD_REMOTE_ALLOW), tls: hasTls ? tls : undefined, oidc },
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -394,6 +400,8 @@ export interface RemoteGateDeps {
   /** Arquivo da CA pública servido em /remote/ca.crt (ausente = sem download). */
   caFile?: string;
   throttle?: LoginThrottle;
+  /** Login pelo IAM: quando presente, é a única forma de entrar por esta porta. */
+  oidc?: Pick<OidcLogin, 'begin' | 'finish'>;
   /** Conferência da senha (injetável nos testes; padrão: scrypt). */
   verify?: (password: string, hash: PasswordHash) => Promise<boolean>;
 }
@@ -406,10 +414,65 @@ export function createRemoteGate(deps: RemoteGateDeps): (req: IncomingMessage, r
   const throttle = deps.throttle ?? new LoginThrottle();
   const verify = deps.verify ?? verifyPassword;
   const caAvailable = () => !!deps.caFile && existsSync(deps.caFile);
+
+  const oidcStateCookie = (value: string, maxAgeS: number) =>
+    `${OIDC_STATE_COOKIE}=${value}; Path=/oidc; HttpOnly; SameSite=Lax; Max-Age=${maxAgeS}${deps.secure ? '; Secure' : ''}`;
+
+  /** Rotas do login pelo IAM; devolve true quando já respondeu. Com o IAM ligado, a senha local não é aceita. */
+  const handleOidc = (oidc: NonNullable<RemoteGateDeps['oidc']>, req: IncomingMessage, res: ServerResponse, url: URL, authed: boolean): boolean => {
+    const redirect = (location: string, cookies: string[] = []) => {
+      res.writeHead(302, { Location: location, 'Cache-Control': 'no-store', ...(cookies.length ? { 'Set-Cookie': cookies } : {}) });
+      res.end();
+    };
+    const fail = (status: number, message: string) => {
+      if (!res.headersSent) sendJson(res, status, { error: message }, { 'Set-Cookie': oidcStateCookie('', 0) });
+    };
+    switch (url.pathname) {
+      case '/login':
+        req.resume();
+        redirect(authed ? '/' : OIDC_LOGIN_PATH);
+        return true;
+      case '/api/remote/login':
+        req.resume();
+        sendJson(res, 404, { error: tr('entre pelo login da organização') });
+        return true;
+      case OIDC_LOGIN_PATH:
+        req.resume();
+        oidc.begin().then(
+          ({ location, state }) => redirect(location, [oidcStateCookie(state, 600)]),
+          (err: unknown) => {
+            log.warnOnce(`oidc-begin:${errMsg(err)}`, tr('Login OIDC indisponível ({0}).', [errMsg(err)]));
+            fail(502, tr('o serviço de login está indisponível'));
+          },
+        );
+        return true;
+      case OIDC_CALLBACK_PATH:
+        req.resume();
+        oidc.finish(url.searchParams, readCookie(req.headers.cookie, OIDC_STATE_COOKIE)).then(
+          (result) => {
+            if (result.ok) {
+              const { token, maxAgeS } = deps.sessions.issue();
+              redirect('/', [cookieHeader(token, maxAgeS, deps.secure), oidcStateCookie('', 0)]);
+            } else if (result.reason === 'denied') fail(403, tr('esta conta não tem acesso a este sistema'));
+            else fail(400, tr('login inválido ou expirado: tente de novo'));
+          },
+          (err: unknown) => {
+            log.warnOnce(`oidc-finish:${errMsg(err)}`, tr('Login OIDC falhou ({0}).', [errMsg(err)]));
+            fail(502, tr('o serviço de login está indisponível'));
+          },
+        );
+        return true;
+      default:
+        return false;
+    }
+  };
+
   return (req, res, url) => {
     const path = url.pathname;
     const method = req.method ?? 'GET';
     const authed = deps.sessions.verify(readCookie(req.headers.cookie, COOKIE));
+
+    if (deps.oidc && handleOidc(deps.oidc, req, res, url, authed)) return true;
 
     if (path === '/api/remote/login') {
       if (method !== 'POST') {

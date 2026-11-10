@@ -9,6 +9,7 @@ import { AccountsService } from './accounts/service';
 import { isTruthy, loadConfig, messagesOffReason, terminalOffReason, worldSocketUrl } from './config';
 import { createApiHandler, sendJson } from './http/app';
 import { createRequestGuard, isLoopbackHost } from './http/guard';
+import { OidcLogin } from './http/oidc';
 import { createRemoteGate, isRemoteRequest, loadSecret, RemoteSessions, startRemoteListener, type RemoteListener } from './http/remote';
 import { Hub } from './http/sse';
 import { createStaticHandler } from './http/static';
@@ -37,6 +38,7 @@ import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
 import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
+import { ShellbySource } from './sources/shellby/source';
 import { createBuildReader, readBuildInfo } from './build';
 import { UpdateChecker } from './updates/checker';
 import { getLocale, tr } from '../shared/i18n';
@@ -141,6 +143,9 @@ if (codex) agents.add(codex);
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
+// Agentes do ChatGPT que usam o Shellby por MCP (sources/shellby/): só com HABBLAUD_SHELLBY_URL.
+const shellby = config.shellbyUrl ? new ShellbySource({ accounts, office, url: config.shellbyUrl }) : undefined;
+if (shellby) agents.add(shellby);
 late.office = office;
 late.agents = agents;
 // Página que pode responder pelo escritório: Host local na porta local; na remota, só com permissions liberado.
@@ -165,7 +170,8 @@ const worldUplink =
         locale: () => getLocale() as WorldLocale,
         store: worldStore,
         canAct: () => config.terminal,
-        agents: () => office.list(),
+        // Agentes do Shellby ficam só nesta máquina: o protocolo do World conhece apenas Claude Code e Codex.
+        agents: () => office.list().filter((a) => a.provider !== 'shellby'),
         subscribe: (cb) => office.onChange(cb),
         booting: () => office.isBooting(),
         tokens: () => worldTokens.read(),
@@ -274,6 +280,7 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
+      shellby,
     })
   : undefined;
 late.messages = messages;
@@ -434,11 +441,13 @@ server.on('error', (err: NodeJS.ErrnoException) => {
 let remoteListener: RemoteListener | undefined;
 if (config.remote) {
   const remote = config.remote;
+  if (config.remoteWarning) log.warn(`   ${config.remoteWarning}.`);
   const gate = createRemoteGate({
     config: remote,
     sessions: new RemoteSessions(loadSecret(join(config.dataDir, 'remote-secret')), remote, Date.now, join(config.dataDir, 'remote-revoked.json')),
     secure: !!remote.tls,
     caFile: remote.tls?.caFile,
+    oidc: remote.oidc ? new OidcLogin(remote.oidc) : undefined,
   });
   remoteListener = startRemoteListener(
     remote,

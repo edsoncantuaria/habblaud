@@ -82,6 +82,8 @@ export interface MessageRegistryOptions {
   demoDeliver?: (agentId: string, text: string) => boolean;
   /** Mensagens aos agentes do Codex; ausente = eles não recebem. */
   codex?: CodexDeliveryOptions;
+  /** Mensagens aos agentes do Shellby (fila de steer dele); ausente = eles não recebem. */
+  shellby?: { deliver(agentId: string, text: string): Promise<void> };
   now?: () => number;
   /** Intervalo do relógio interno (start). */
   tickMs?: number;
@@ -123,6 +125,8 @@ interface Entry {
   demo?: boolean;
   /** Mensagem a um agente do Codex: sai pelo entregador do Codex ('node' = o servidor rodou; 'bridge' = o auxiliar). */
   codex?: true;
+  /** Mensagem a um agente do Shellby: sai direto para a fila de steer dele. */
+  shellby?: true;
   via?: 'node' | 'bridge';
   /** Falhou por falta de confirmação: uma confirmação atrasada ainda corrige a situação. */
   late?: boolean;
@@ -234,12 +238,14 @@ export class MessageRegistry {
     const out = new Set<string>();
     for (const id of this.seen.keys()) if (this.canMessage(id)) out.add(id);
     if (this.codexAvailable()) for (const a of this.opts.office.list()) if (a.provider === 'codex' && a.kind === 'main' && present(a)) out.add(a.id);
+    if (this.opts.shellby) for (const a of this.opts.office.list()) if (a.provider === 'shellby' && a.kind === 'main' && present(a)) out.add(a.id);
     return out;
   }
 
   canMessage(agentId: string): boolean {
     const a = this.opts.office.get(agentId);
     if (a?.provider === 'codex') return this.codexAvailable() && present(a) && a.kind === 'main';
+    if (a?.provider === 'shellby') return !!this.opts.shellby && present(a) && a.kind === 'main';
     const at = this.seen.get(agentId);
     if (at === undefined || this.now() - at >= this.presenceMs) return false;
     return present(a) && a.kind === 'main';
@@ -273,9 +279,11 @@ export class MessageRegistry {
     const entry: Entry = { msg: { id, agentId, status: 'queued', createdAt: now, updatedAt: now }, text, activity: describeMessage(text), target: agent.sessionId };
     if (demo) entry.demo = true;
     else if (real?.provider === 'codex') entry.codex = true;
+    else if (real?.provider === 'shellby') entry.shellby = true;
     this.messages.set(id, entry);
     const out = { ...entry.msg };
     if (entry.codex) this.pumpCodex();
+    if (entry.shellby) this.deliverShellby(entry, now);
     return { message: out };
   }
 
@@ -468,7 +476,17 @@ export class MessageRegistry {
     }
   }
 
-  /** Fim de um `codex queue` rodado daqui. */
+  /** Entrega ao Shellby; `delivered` = o Shellby aceitou; ele a escreve no chat do agente quando estiver livre. */
+  private deliverShellby(e: Entry, now: number): void {
+    this.setStatus(e, 'sent', now);
+    e.sentAt = now;
+    this.opts.shellby?.deliver(e.msg.agentId, e.text).then(
+      () => this.codexDone(e, { ok: true }),
+      (err: unknown) => this.codexDone(e, { ok: false, error: errMsg(err) }),
+    );
+  }
+
+  /** Fim de uma entrega feita daqui (`codex queue` ou Shellby). */
   private codexDone(e: Entry, r: CodexQueueResult): void {
     if (this.messages.get(e.msg.id) !== e) return;
     if (e.msg.status !== 'sent' && !(e.msg.status === 'failed' && e.late)) return;

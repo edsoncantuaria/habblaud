@@ -286,6 +286,9 @@ credenciais › Instalar certificado › Certificado de CA), conferindo a impres
   https+insecure://127.0.0.1:443` publica a porta remota (com login) só para os seus aparelhos, com certificado válido
   em `https://<computador>.<tailnet>.ts.net`; ponha esse nome em `HABBLAUD_ALLOWED_HOSTS`. Aponte sempre para a porta
   remota, nunca para a 4747 (que não pede login).
+- **Login por um IAM (OIDC):** com `HABBLAUD_REMOTE_OIDC_ISSUER`, `HABBLAUD_REMOTE_OIDC_CLIENT_ID`,
+  `HABBLAUD_REMOTE_OIDC_REDIRECT_URI` e `HABBLAUD_REMOTE_OIDC_ALLOW` (e-mails, separados por vírgula), a porta remota entra pelo
+  provedor com PKCE e deixa de aceitar a senha local. Registre o endereço de `/oidc/callback` no provedor.
 - **Sessão:** 30 dias; trocar a senha (rodar o setup de novo) derruba todas, e **Configurações › Acesso pelo celular ›
   Sair** encerra a daquele aparelho. Depois de 5 senhas erradas seguidas, cada nova tentativa espera de 1 s até 5 min.
 - **IP mudou?** O `docker:up` refaz o certificado do servidor quando falta o IP novo ou quando faltam 30 dias para
@@ -725,6 +728,7 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_REMOTE_ALLOW` | `permissions` | O que o [celular com login](#celular-com-login-e-https-aprovando-pedidos) pode fazer: `permissions`, `messages`, `terminal`, `spawn` (separados por vírgula) ou `none`. Os outros `HABBLAUD_REMOTE_*` são escritos pelo `npm run remote:setup`. |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0` desliga só as mensagens pelo escritório (a caixa no terminal e nos detalhes do agente). |
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
+| `HABBLAUD_SHELLBY_URL` | desligado | Origem do servidor do Shellby (ex.: `http://127.0.0.1:3333`, com `[ui] enabled = true` nele): os agentes dele entram na sala “shellby”. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |
